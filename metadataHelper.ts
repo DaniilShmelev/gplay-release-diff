@@ -5,15 +5,15 @@ import * as tl from 'azure-pipelines-task-lib/task';
 import { androidpublisher_v3 as pub3 } from 'googleapis';
 
 /**
- * Uploads change log files if specified for all the version codes in the update
+ * Uploads change log files if specified for all the apk version codes in the update
  * @param changelogFile
- * @param versionCodes
+ * @param apkVersionCodes
  * @returns nothing
  */
-export async function getCommonReleaseNotes(languageCode: string, changelogFile: string): Promise<pub3.Schema$LocalizedText | null> {
+ async function getCommonReleaseNotes(languageCode: string, changelogFile: string): Promise<googleutil.ReleaseNotes | null> {
     const stats: tl.FsStats = tl.stats(changelogFile);
 
-    let releaseNotes: pub3.Schema$LocalizedText = null;
+    let releaseNotes: googleutil.ReleaseNotes = null;
     if (stats && stats.isFile()) {
         console.log(tl.loc('AppendChangelog', changelogFile));
         releaseNotes = {
@@ -45,13 +45,13 @@ function getChangelog(changelogFile: string): string {
 }
 
 /**
- * Adds all release notes found in directory to an edit. Pulls version code from file name.
+ * Adds all release notes found in directory to an edit. Pulls version code from file name. Failing this, assumes the global version code inferred from apk
  * Assumes authorized
  * @param {string} languageCode Language code (a BCP-47 language tag) of the localized listing to update
  * @param {string} directory Directory with a changesogs folder where release notes can be found.
  * @returns nothing
  */
-async function addAllReleaseNotes(versionCodes: number[], languageCode: string, directory: string): Promise<pub3.Schema$LocalizedText[]> {
+async function addAllReleaseNotes(apkVersionCodes: number[], languageCode: string, directory: string): Promise<googleutil.ReleaseNotes[]> {
     const changelogDir: string = path.join(directory, 'changelogs');
 
     const changelogs: string[] = filterDirectoryContents(changelogDir, stat => stat.isFile());
@@ -60,11 +60,11 @@ async function addAllReleaseNotes(versionCodes: number[], languageCode: string, 
         return [];
     }
 
-    const releaseNotes: pub3.Schema$LocalizedText[] = [];
+    const releaseNotes: googleutil.ReleaseNotes[] = [];
     for (const changelogFile of changelogs) {
         const changelogName: string = path.basename(changelogFile, path.extname(changelogFile));
         const changelogVersion: number = parseInt(changelogName, 10);
-        if (!isNaN(changelogVersion) && (versionCodes.indexOf(changelogVersion) !== -1)) {
+        if (!isNaN(changelogVersion) && (apkVersionCodes.indexOf(changelogVersion) !== -1)) {
             const fullChangelogPath: string = path.join(changelogDir, changelogFile);
 
             console.log(tl.loc('AppendChangelog', fullChangelogPath));
@@ -135,16 +135,16 @@ function filterDirectoryContents(directory: string, filter: (stats: tl.FsStats) 
  * @param {string} metadataRootDirectory Path to the folder where the Fastlane metadata structure is found. eg the folders under this directory should be the language codes
  * @returns nothing
  */
-export async function addMetadata(edits: pub3.Resource$Edits, versionCodes: number[], metadataRootDirectory: string): Promise<pub3.Schema$LocalizedText[]> {
+async function addMetadata(edits: pub3.Resource$Edits, apkVersionCodes: number[], metadataRootDirectory: string): Promise<googleutil.ReleaseNotes[]> {
     const metadataLanguageCodes: string[] = filterDirectoryContents(metadataRootDirectory, stat => stat.isDirectory());
     tl.debug(`Found language codes: ${metadataLanguageCodes}`);
 
-    let allReleaseNotes: pub3.Schema$LocalizedText[] = [];
+    let allReleaseNotes: googleutil.ReleaseNotes[] = [];
     for (const languageCode of metadataLanguageCodes) {
         const metadataDirectory: string = path.join(metadataRootDirectory, languageCode);
 
-        tl.debug(`Uploading metadata from ${metadataDirectory} for language code ${languageCode} and version codes ${versionCodes}`);
-        const releaseNotesForLanguage = await uploadMetadataWithLanguageCode(edits, versionCodes, languageCode, metadataDirectory);
+        tl.debug(`Uploading metadata from ${metadataDirectory} for language code ${languageCode} and version codes ${apkVersionCodes}`);
+        const releaseNotesForLanguage = await uploadMetadataWithLanguageCode(edits, apkVersionCodes, languageCode, metadataDirectory);
         allReleaseNotes = allReleaseNotes.concat(releaseNotesForLanguage);
     }
 
@@ -159,14 +159,14 @@ export async function addMetadata(edits: pub3.Resource$Edits, versionCodes: numb
  * @param {string} directory Directory where updated listing details can be found.
  * @returns nothing
  */
-async function uploadMetadataWithLanguageCode(edits: pub3.Resource$Edits, versionCodes: number[], languageCode: string, directory: string): Promise<pub3.Schema$LocalizedText[]> {
+async function uploadMetadataWithLanguageCode(edits: pub3.Resource$Edits, apkVersionCodes: number[], languageCode: string, directory: string): Promise<googleutil.ReleaseNotes[]> {
     console.log(tl.loc('UploadingMetadataForLanguage', directory, languageCode));
 
     tl.debug(`Adding localized store listing for language code ${languageCode} from ${directory}`);
     await addLanguageListing(edits, languageCode, directory);
 
     tl.debug(`Uploading change logs for language code ${languageCode} from ${directory}`);
-    const releaseNotes: pub3.Schema$LocalizedText[] = await addAllReleaseNotes(versionCodes, languageCode, directory);
+    const releaseNotes: googleutil.ReleaseNotes[] = await addAllReleaseNotes(apkVersionCodes, languageCode, directory);
 
     tl.debug(`Uploading images for language code ${languageCode} from ${directory}`);
     await attachImages(edits, languageCode, directory);
@@ -182,7 +182,7 @@ async function uploadMetadataWithLanguageCode(edits: pub3.Resource$Edits, versio
  * @returns nothing
  */
 async function addLanguageListing(edits: pub3.Resource$Edits, languageCode: string, directory: string) {
-    const listingResource: pub3.Schema$Listing = createListingResource(languageCode, directory);
+    const listingResource: googleutil.AndroidListingResource = createListingResource(languageCode, directory);
 
     const isPatch:boolean = (!listingResource.fullDescription) ||
                           (!listingResource.shortDescription) ||
@@ -193,9 +193,9 @@ async function addLanguageListing(edits: pub3.Resource$Edits, languageCode: stri
                           (!listingResource.video) &&
                           (!listingResource.title);
 
-    const listingRequestParameters: pub3.Params$Resource$Edits$Listings$Patch = {
+    const listingRequestParameters: googleutil.PackageListingParams = {
         language: languageCode,
-        requestBody: listingResource
+        resource: listingResource
     };
 
     try {
@@ -229,7 +229,7 @@ async function addLanguageListing(edits: pub3.Resource$Edits, languageCode: stri
  * @returns {AndroidListingResource} resource A crafted resource for the edits.listings.update method.
  *          { languageCode: string, fullDescription: string, shortDescription: string, title: string, video: string }
  */
-function createListingResource(languageCode: string, directory: string): pub3.Schema$Listing {
+function createListingResource(languageCode: string, directory: string): googleutil.AndroidListingResource {
     tl.debug(`Constructing resource to update listing with language code ${languageCode} from ${directory}`);
 
     const resourceParts = {
@@ -239,7 +239,7 @@ function createListingResource(languageCode: string, directory: string): pub3.Sc
         video: 'video.txt'
     };
 
-    const resource: pub3.Schema$Listing = {
+    const resource: googleutil.AndroidListingResource = {
         language: languageCode
     };
 
@@ -301,7 +301,7 @@ async function attachImages(edits: pub3.Resource$Edits, languageCode: string, di
  */
 async function removeOldImages(edits: pub3.Resource$Edits, languageCode: string, imageType: string) {
     try {
-        let imageRequest: pub3.Params$Resource$Edits$Images$Deleteall = {
+        let imageRequest: googleutil.PackageParams = {
             language: languageCode,
             imageType: imageType
         };
@@ -432,12 +432,12 @@ function getImageList(directory: string): { [key: string]: string[] } {
  * @returns nothing
  */
 async function uploadImage(edits: pub3.Resource$Edits, languageCode: string, imageType: string, imagePath: string) {
-    // Docs at https://developers.google.com/android-publisher/api-ref/edits/images/upload
-    const imageRequest: pub3.Params$Resource$Edits$Images$Upload = {
+    const imageRequest: googleutil.PackageParams = {
         language: languageCode,
         imageType: imageType
     };
-    // imageRequest.uploadType = 'media';
+
+    imageRequest.uploadType = 'media';
     imageRequest.media = {
         body: fs.createReadStream(imagePath),
         mimeType: helperResolveImageMimeType(imagePath)
